@@ -1,10 +1,10 @@
 :root {
-  --bg: #f4e4f2;
+  --bg: #f5f3ee;
   --card: #ffffff;
   --ink: #26231f;
   --muted: #7a746b;
   --line: #e4dfd5;
-  --accent: #5f0450;
+  --accent: #2f5d50;
   --accent-ink: #ffffff;
   --danger: #b3382c;
   --star: #c98a1b;
@@ -29,22 +29,9 @@ header {
   background: var(--accent);
   color: var(--accent-ink);
 }
-header h1 {
-  margin: 0; font-size: 1.4rem; 
-  font-family: "Playwrite IT Trad", cursive;
-}
+header h1 { margin: 0; font-size: 1.4rem; }
 
-.playwrite-it-trad {
-  font-family: "Playwrite IT Trad", cursive;
-  font-optical-sizing: auto;
-  font-weight: 400;
-  font-style: normal;
-}
-
-.tabs { 
-  display: flex; gap: 4px; flex-wrap: wrap; 
-  font-family: "Playwrite IT Trad", cursive;
-}
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
 .tabs button {
   background: transparent;
   color: var(--accent-ink);
@@ -131,6 +118,37 @@ td.row-actions button { margin-right: 4px; }
   font-size: 0.8rem;
   font-weight: 600;
 }
+.badge.low { background: #fbeccb; color: #8a5a00; }
+.badge.out { background: #f6d8d4; color: var(--danger); }
+
+/* Low-stock warning banner (shown on every tab) */
+.alert {
+  background: #fff4d6;
+  border-bottom: 1px solid #ecd08a;
+  color: #6b4a00;
+  padding: 10px 24px;
+  font-size: 0.92rem;
+}
+.alert a { color: #6b4a00; font-weight: 700; margin-left: 4px; }
+
+/* Stock overview */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.stat { border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; background: #faf9f5; }
+.stat-n { font-size: 1.6rem; font-weight: 700; }
+.stat-l { color: var(--muted); font-size: 0.82rem; }
+.stat.low { background: #fff4d6; border-color: #ecd08a; }
+.stat.out { background: #fbe6e3; border-color: #e8b4ad; }
+.threshold { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+tr.row-low td { background: #fffaf0; }
+tr.row-out td { background: #fdf3f1; }
+
+/* Cart */
+.cart-add { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; margin-top: 14px; }
+.cart-add label:first-child { flex: 1 1 320px; }
+input.qty { width: 84px; }
+.warn-text { color: #8a5a00; font-weight: 600; min-height: 1.2em; margin: 4px 0 0; }
+.checkout { align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 a.title-link { color: var(--accent); font-weight: 600; text-decoration: none; }
 a.title-link:hover { text-decoration: underline; }

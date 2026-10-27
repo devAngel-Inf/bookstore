@@ -1,0 +1,12 @@
+# Secrets: never commit these (your database password is in .env)
+.env
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Editor / OS files
+.DS_Store
+Thumbs.db

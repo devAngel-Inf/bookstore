@@ -4,21 +4,22 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Book Manager</title>
-  <link rel="stylesheet" href="style.css?v=4" />
-  <style>
-    @import url('https://fonts.googleapis.com/css2?family=Playwrite+IT+Trad:wght@100..400&display=swap');
-  </style>
+  <link rel="stylesheet" href="style.css?v=5" />
 </head>
 <body>
   <header>
-    <h1>ꨄ 🕮 ⋆☕︎˖ Book Manager™ ️</h1>
+    <h1>📚 Book Manager</h1>
     <nav class="tabs">
       <button type="button" data-tab="books" class="active">Books</button>
+      <button type="button" data-tab="stock">Stock</button>
+      <button type="button" data-tab="cart">Cart</button>
       <button type="button" data-tab="orders">Orders</button>
       <button type="button" data-tab="customers">Customers</button>
       <button type="button" data-tab="authors">Authors</button>
     </nav>
   </header>
+
+  <div id="alert" class="alert" role="alert" hidden></div>
 
   <main>
     <!-- ================= BOOKS ================= -->
@@ -37,6 +38,7 @@
             <label>Stock <input id="stock_quantity" type="number" min="0" value="0" /></label>
             <label>Publication year <input id="publication_year" type="number" min="0" max="2100" /></label>
           </div>
+          <p class="muted">🔒 Changing a price only affects books added to a cart afterwards. Carts and orders keep the price they were created with.</p>
           <div class="actions">
             <button type="submit" id="save-btn">Add book</button>
             <button type="button" id="cancel-btn" class="secondary" hidden>Cancel edit</button>
@@ -73,6 +75,88 @@
           </table>
         </div>
         <p id="empty" class="note" hidden>No books found.</p>
+      </section>
+    </div>
+
+    <!-- ================= STOCK ================= -->
+    <div class="tab" id="tab-stock" hidden>
+      <section class="card">
+        <h2>Stock overview</h2>
+        <div id="stock-cards" class="stats"></div>
+        <form id="threshold-form" class="threshold">
+          <label class="inline">
+            Warn me when a book has
+            <input id="threshold" type="number" min="0" step="1" value="5" class="qty" />
+            copies or fewer
+          </label>
+          <button type="submit" class="small">Save</button>
+        </form>
+        <p id="threshold-message" role="status"></p>
+        <p id="threshold-hint" class="muted"></p>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Stock by book</h2>
+          <label class="inline"><input type="checkbox" id="only-low" /> Only low / out of stock</label>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Title</th><th>Author</th><th>In stock</th><th>Status</th>
+                <th>Sold (30 days)</th><th>Est. days left</th><th>Price</th>
+              </tr>
+            </thead>
+            <tbody id="stock-rows"></tbody>
+          </table>
+        </div>
+        <p id="stock-empty" class="note" hidden>Nothing to show.</p>
+        <p class="muted">Est. days left uses the last 30 days of orders. To add stock, edit the book on the Books tab.</p>
+      </section>
+    </div>
+
+    <!-- ================= CART ================= -->
+    <div class="tab" id="tab-cart" hidden>
+      <section class="card">
+        <h2>Cart</h2>
+        <div class="grid">
+          <label>Cart for
+            <select id="cart-customer"><option value="">Choose a customer…</option></select>
+          </label>
+        </div>
+        <form id="cart-add-form" class="cart-add">
+          <label>Book
+            <select id="cart-book"><option value="">Choose a book…</option></select>
+          </label>
+          <label>Quantity <input id="cart-qty" type="number" min="1" value="1" class="qty" /></label>
+          <button type="submit">Add to cart</button>
+        </form>
+        <p class="muted">🔒 A book's price is locked when it is first added to a cart. If the price changes later, the cart and the order keep the locked price.</p>
+        <p id="cart-message" role="status"></p>
+        <p id="cart-warn" class="warn-text"></p>
+      </section>
+
+      <section class="card">
+        <h2>Items in cart</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Book</th><th>Author</th><th>Qty</th><th>Locked price</th><th>Line total</th><th></th></tr>
+            </thead>
+            <tbody id="cart-rows"></tbody>
+            <tfoot>
+              <tr><td colspan="4" class="right"><strong>Cart total</strong></td><td id="cart-total"></td><td></td></tr>
+            </tfoot>
+          </table>
+        </div>
+        <p id="cart-empty" class="note">Choose a customer to see their cart.</p>
+        <div class="actions checkout">
+          <label class="inline">Order status
+            <select id="cart-status"><option value="Pending">Pending</option></select>
+          </label>
+          <button type="button" id="checkout-btn" disabled>Place order</button>
+        </div>
       </section>
     </div>
 
@@ -204,14 +288,15 @@
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Book</th><th>Author</th><th>Qty</th><th>Unit price</th><th>Line total</th></tr></thead>
+        <thead><tr><th>Book</th><th>Author</th><th>Qty</th><th>Price paid</th><th>Line total</th></tr></thead>
         <tbody id="od-rows"></tbody>
         <tfoot><tr><td colspan="4" class="right"><strong>Order total</strong></td><td id="od-total"></td></tr></tfoot>
       </table>
     </div>
     <p id="od-message" class="note"></p>
+    <p class="muted">🔒 Prices on an order are the prices at the time it was placed and never change.</p>
   </dialog>
 
-  <script src="app.js?v=4"></script>
+  <script src="app.js?v=5"></script>
 </body>
 </html>

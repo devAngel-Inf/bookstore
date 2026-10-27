@@ -29,13 +29,19 @@ SORTS = {
     "title_desc": "LOWER(b.title) DESC, b.book_id DESC",
 }
 DEFAULT_SORT = "recent_added"
+DEFAULT_LOW_STOCK = 5
+LOW_STOCK_KEY = "low_stock_threshold"
 
 
 class Invalid(Exception):
-    """Bad input from the browser; message is shown to the user."""
+    """Bad input from the browser; message is shown to the user (HTTP 400)."""
 
 
-# ---------- Helpers ----------
+class Missing(Exception):
+    """Something the user referred to does not exist (HTTP 404)."""
+
+
+# ---------- Database helpers ----------
 
 def _plain(value):
     if isinstance(value, (datetime.datetime, datetime.date)):
@@ -43,26 +49,56 @@ def _plain(value):
     return value
 
 
+class Tx:
+    """One pooled connection used as a transaction.
+    Commits when the block ends normally and rolls back if anything is raised,
+    so multi-step work (like checkout) is all-or-nothing."""
+
+    def __enter__(self):
+        self.conn = pool.acquire()
+        self.cur = self.conn.cursor()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if exc_type is None:
+                self.conn.commit()
+            else:
+                self.conn.rollback()
+        finally:
+            self.cur.close()
+            self.conn.close()
+        return False
+
+    def execute(self, sql, binds=None):
+        self.cur.execute(sql, binds or {})
+        return self.cur.rowcount
+
+    def query(self, sql, binds=None):
+        self.cur.execute(sql, binds or {})
+        cols = [c[0].lower() for c in self.cur.description]
+        return [
+            {k: _plain(v) for k, v in zip(cols, row)}
+            for row in self.cur.fetchall()
+        ]
+
+
 def run(sql, binds=None, fetch=False):
-    """Run one statement on a pooled connection. Returns rows (fetch) or rowcount."""
-    with pool.acquire() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, binds or {})
-            if fetch:
-                cols = [c[0].lower() for c in cur.description]
-                return [
-                    {k: _plain(v) for k, v in zip(cols, row)}
-                    for row in cur.fetchall()
-                ]
-            conn.commit()
-            return cur.rowcount
+    """Run one statement in its own transaction. Returns rows (fetch) or rowcount."""
+    with Tx() as tx:
+        return tx.query(sql, binds) if fetch else tx.execute(sql, binds)
 
 
-def insert_row(table, id_col, values, raw=None):
-    """INSERT a row. If the id column is not auto-generated in your database
-    (ORA-01400), retry using MAX(id) + 1 so it works either way.
-    `raw` holds columns set from SQL expressions, e.g. {"registration_date": "SYSDATE"}.
+def insert_row(table, id_col, values, raw=None, tx=None):
+    """INSERT a row and return its new id.
+    If the id column is not auto-generated in your database (ORA-01400), retry
+    using MAX(id) + 1 so it works either way.
+    `raw` holds columns set from SQL expressions, e.g. {"order_date": "SYSDATE"}.
     """
+    if tx is None:
+        with Tx() as own:
+            return insert_row(table, id_col, values, raw, own)
+
     raw = raw or {}
 
     def build(with_id):
@@ -71,17 +107,26 @@ def insert_row(table, id_col, values, raw=None):
         if with_id:
             cols.insert(0, id_col)
             vals.insert(0, f"(SELECT NVL(MAX({id_col}), 0) + 1 FROM {table})")
-        return f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join(vals)})"
+        return (f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join(vals)}) "
+                f"RETURNING {id_col} INTO :new_id")
+
+    def attempt(with_id):
+        new_id = tx.cur.var(oracledb.NUMBER)
+        tx.execute(build(with_id), {**values, "new_id": new_id})
+        got = new_id.getvalue()
+        got = got[0] if isinstance(got, (list, tuple)) else got
+        return int(got) if got is not None else None
 
     try:
-        run(build(False), values)
+        return attempt(False)
     except oracledb.DatabaseError as err:
-        text = str(err).upper()
-        if "ORA-01400" in text and id_col.upper() in text:
-            run(build(True), values)
-        else:
-            raise
+        text_ = str(err).upper()
+        if "ORA-01400" in text_ and id_col.upper() in text_:
+            return attempt(True)
+        raise
 
+
+# ---------- Input helpers ----------
 
 def num(value, cast, label, required=False, minimum=None):
     if value in (None, ""):
@@ -113,19 +158,33 @@ def handle_invalid(err):
     return jsonify(error=str(err)), 400
 
 
+@app.errorhandler(Missing)
+def handle_missing(err):
+    return jsonify(error=str(err)), 404
+
+
 @app.errorhandler(oracledb.Error)
 def handle_db_error(err):
     msg = str(err)
+    if "ORA-20001" in msg:
+        return jsonify(error="Prices on order lines are locked and cannot be changed"), 409
     if "ORA-00001" in msg:
         return jsonify(error="That value already exists (for example a duplicate ISBN or email)"), 409
     if "ORA-02292" in msg:
         return jsonify(error="Can't delete this: other records (such as orders) still use it"), 409
     if "ORA-02291" in msg:
-        return jsonify(error="A related record was not found (check the selected author or book)"), 404
+        return jsonify(error="A related record was not found (check the selected author, book or customer)"), 404
     if "ORA-12899" in msg:
         return jsonify(error="One of the values is too long"), 400
-    if "ORA-02290" in msg or "ORA-01438" in msg:
-        return jsonify(error="A number is outside the range the database allows"), 400
+    if "ORA-02290" in msg:
+        rule = re.search(r"\(([^)]+)\)", msg)
+        return jsonify(error="The database rejected a value"
+                             + (f" (rule {rule.group(1)})" if rule else "")), 400
+    if "ORA-01438" in msg:
+        return jsonify(error="A number is larger than the database allows"), 400
+    if "ORA-00942" in msg:
+        return jsonify(error="A required table is missing. Run setup_cart_stock.sql once in "
+                             "VS Code (see README), then try again."), 500
     app.logger.error(msg)
     return jsonify(error=msg), 500
 
@@ -188,6 +247,8 @@ def add_book():
 
 @app.put("/api/books/<int:book_id>")
 def update_book(book_id):
+    # Only the books row changes. Prices already copied into carts and orders
+    # are separate values and are never touched here (price immutability).
     b = clean_book(request.get_json(silent=True))
     run(
         """UPDATE books
@@ -202,8 +263,8 @@ def update_book(book_id):
 
 @app.delete("/api/books/<int:book_id>")
 def delete_book(book_id):
-    # Reviews go with the book (ON DELETE CASCADE). A book that appears in
-    # order_items is protected by the database and returns a clear message.
+    # Reviews and cart lines go with the book (ON DELETE CASCADE). A book that
+    # appears in order_items is protected by the database and returns a clear message.
     run("DELETE FROM books WHERE book_id = :id", {"id": book_id})
     return jsonify(ok=True)
 
@@ -213,6 +274,237 @@ def mark_viewed(book_id):
     """Record that a book was just opened (drives the 'recently viewed' sort)."""
     run("UPDATE books SET last_viewed = SYSTIMESTAMP WHERE book_id = :id", {"id": book_id})
     return jsonify(ok=True)
+
+
+# ---------- Stock ----------
+
+def get_threshold():
+    """Returns (threshold, can_save). can_save is False until setup_cart_stock.sql has run."""
+    try:
+        rows = run(
+            "SELECT setting_value FROM app_settings WHERE setting_key = :k",
+            {"k": LOW_STOCK_KEY},
+            fetch=True,
+        )
+    except oracledb.DatabaseError as err:
+        if "ORA-00942" in str(err):
+            return DEFAULT_LOW_STOCK, False
+        raise
+    if rows:
+        try:
+            return max(0, int(rows[0]["setting_value"])), True
+        except (TypeError, ValueError):
+            pass
+    return DEFAULT_LOW_STOCK, True
+
+
+@app.get("/api/stock")
+def stock_overview():
+    threshold, can_save = get_threshold()
+    rows = run(
+        """SELECT b.book_id, b.title, a.author_name, b.stock_quantity, b.unit_price,
+                  NVL((SELECT SUM(i.quantity)
+                         FROM order_items i
+                         JOIN orders o ON o.order_id = i.order_id
+                        WHERE i.book_id = b.book_id
+                          AND o.order_date >= SYSDATE - 30), 0) AS sold_30d
+             FROM books b
+             LEFT JOIN authors a ON a.author_id = b.author_id
+            ORDER BY b.stock_quantity ASC, LOWER(b.title) ASC""",
+        fetch=True,
+    )
+    low = out = units = 0
+    for r in rows:
+        stock = r["stock_quantity"] or 0
+        units += stock
+        if stock <= 0:
+            r["status"] = "out"
+            out += 1
+        elif stock <= threshold:
+            r["status"] = "low"
+            low += 1
+        else:
+            r["status"] = "ok"
+        sold = r["sold_30d"] or 0
+        # Rough "how long will it last" from the last 30 days of orders
+        r["days_left"] = round(stock / (sold / 30)) if sold > 0 and stock > 0 else None
+    return jsonify(
+        threshold=threshold,
+        can_save=can_save,
+        summary={"titles": len(rows), "units": units, "low": low, "out": out},
+        books=rows,
+    )
+
+
+@app.put("/api/settings/low-stock")
+def set_low_stock():
+    body = request.get_json(silent=True) or {}
+    n = num(body.get("threshold"), int, "Threshold", required=True, minimum=0)
+    run(
+        """MERGE INTO app_settings s
+           USING (SELECT :k AS k, :v AS v FROM dual) n
+              ON (s.setting_key = n.k)
+            WHEN MATCHED THEN UPDATE SET s.setting_value = n.v
+            WHEN NOT MATCHED THEN INSERT (setting_key, setting_value) VALUES (n.k, n.v)""",
+        {"k": LOW_STOCK_KEY, "v": str(n)},
+    )
+    return jsonify(ok=True, threshold=n)
+
+
+# ---------- Cart (prices are locked when a book is first added) ----------
+
+@app.get("/api/customers/<int:customer_id>/cart")
+def cart_list(customer_id):
+    rows = run(
+        """SELECT c.book_id, b.title, a.author_name, c.quantity,
+                  c.locked_price, b.unit_price AS current_price,
+                  b.stock_quantity, c.quantity * c.locked_price AS line_total
+             FROM cart_items c
+             JOIN books b ON b.book_id = c.book_id
+             LEFT JOIN authors a ON a.author_id = b.author_id
+            WHERE c.customer_id = :cid
+            ORDER BY c.added_at, c.book_id""",
+        {"cid": customer_id},
+        fetch=True,
+    )
+    return jsonify(rows)
+
+
+@app.post("/api/customers/<int:customer_id>/cart")
+def cart_add(customer_id):
+    body = request.get_json(silent=True) or {}
+    book_id = num(body.get("book_id"), int, "Book", required=True)
+    raw_qty = body.get("quantity")
+    qty = num(1 if raw_qty in (None, "") else raw_qty, int, "Quantity", minimum=1)
+    # The price is always read from the database here. Any price sent by the
+    # browser is ignored, so it can't be tampered with.
+    with Tx() as tx:
+        book = tx.query(
+            "SELECT title, unit_price, stock_quantity FROM books WHERE book_id = :id",
+            {"id": book_id},
+        )
+        if not book:
+            raise Missing("That book no longer exists")
+        book = book[0]
+        existing = tx.query(
+            "SELECT quantity, locked_price FROM cart_items "
+            "WHERE customer_id = :cid AND book_id = :bid",
+            {"cid": customer_id, "bid": book_id},
+        )
+        have = existing[0]["quantity"] if existing else 0
+        if have + qty > book["stock_quantity"]:
+            more = f" ({have} already in this cart)" if have else ""
+            raise Invalid(f"Only {book['stock_quantity']} of '{book['title']}' in stock{more}")
+        if existing:
+            # Quantity only. The locked price stays exactly as it was.
+            tx.execute(
+                "UPDATE cart_items SET quantity = :qty "
+                "WHERE customer_id = :cid AND book_id = :bid",
+                {"qty": have + qty, "cid": customer_id, "bid": book_id},
+            )
+            locked = existing[0]["locked_price"]
+        else:
+            locked = book["unit_price"]
+            tx.execute(
+                "INSERT INTO cart_items (customer_id, book_id, quantity, locked_price) "
+                "VALUES (:cid, :bid, :qty, :price)",
+                {"cid": customer_id, "bid": book_id, "qty": qty, "price": locked},
+            )
+    return jsonify(ok=True, locked_price=locked), 201
+
+
+@app.put("/api/customers/<int:customer_id>/cart/<int:book_id>")
+def cart_set_quantity(customer_id, book_id):
+    body = request.get_json(silent=True) or {}
+    qty = num(body.get("quantity"), int, "Quantity", required=True, minimum=1)
+    with Tx() as tx:
+        book = tx.query(
+            "SELECT title, stock_quantity FROM books WHERE book_id = :id", {"id": book_id}
+        )
+        if not book:
+            raise Missing("That book no longer exists")
+        if qty > book[0]["stock_quantity"]:
+            raise Invalid(f"Only {book[0]['stock_quantity']} of '{book[0]['title']}' in stock")
+        changed = tx.execute(
+            "UPDATE cart_items SET quantity = :qty WHERE customer_id = :cid AND book_id = :bid",
+            {"qty": qty, "cid": customer_id, "bid": book_id},
+        )
+        if not changed:
+            raise Missing("That item is not in the cart")
+    return jsonify(ok=True)
+
+
+@app.delete("/api/customers/<int:customer_id>/cart/<int:book_id>")
+def cart_remove(customer_id, book_id):
+    run(
+        "DELETE FROM cart_items WHERE customer_id = :cid AND book_id = :bid",
+        {"cid": customer_id, "bid": book_id},
+    )
+    return jsonify(ok=True)
+
+
+@app.post("/api/customers/<int:customer_id>/checkout")
+def checkout(customer_id):
+    """Turn the cart into an order. Each order line gets the price that was
+    locked in the cart, not the book's current price. Stock is reduced in the
+    same transaction; if anything fails, nothing is saved."""
+    body = request.get_json(silent=True) or {}
+    status = text(body, "status", "Order status", required=True, max_len=30)
+    threshold, _ = get_threshold()
+    low_now = []
+    total = 0.0
+
+    with Tx() as tx:
+        cart = tx.query(
+            """SELECT c.book_id, c.quantity, c.locked_price, b.title
+                 FROM cart_items c
+                 JOIN books b ON b.book_id = c.book_id
+                WHERE c.customer_id = :cid
+                ORDER BY c.added_at, c.book_id""",
+            {"cid": customer_id},
+        )
+        if not cart:
+            raise Invalid("The cart is empty")
+
+        order_id = insert_row(
+            "orders", "order_id",
+            {"customer_id": customer_id, "order_status": status},
+            raw={"order_date": "SYSDATE"}, tx=tx,
+        )
+        for line in cart:
+            changed = tx.execute(
+                "UPDATE books SET stock_quantity = stock_quantity - :q "
+                "WHERE book_id = :id AND stock_quantity >= :q",
+                {"q": line["quantity"], "id": line["book_id"]},
+            )
+            if not changed:
+                raise Invalid(f"Not enough stock for '{line['title']}'. "
+                              "Lower the quantity in the cart and try again.")
+            insert_row(
+                "order_items", "order_item_id",
+                {"order_id": order_id, "book_id": line["book_id"],
+                 "quantity": line["quantity"], "unit_price": line["locked_price"]},
+                tx=tx,
+            )
+            total += line["quantity"] * float(line["locked_price"])
+            left = tx.query(
+                "SELECT stock_quantity FROM books WHERE book_id = :id", {"id": line["book_id"]}
+            )[0]["stock_quantity"]
+            if left <= threshold:
+                low_now.append({"title": line["title"], "stock_quantity": left})
+        tx.execute("DELETE FROM cart_items WHERE customer_id = :cid", {"cid": customer_id})
+
+    return jsonify(ok=True, order_id=order_id, total=round(total, 2), low_stock=low_now), 201
+
+
+@app.get("/api/order-statuses")
+def order_statuses():
+    """Statuses already used in your orders table, so new orders use a value your database accepts."""
+    rows = run(
+        "SELECT DISTINCT order_status FROM orders WHERE order_status IS NOT NULL ORDER BY order_status",
+        fetch=True,
+    )
+    return jsonify([r["order_status"] for r in rows])
 
 
 # ---------- Reviews ----------

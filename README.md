@@ -11,39 +11,14 @@ Browser (public/)  →  Flask API (app.py)  →  Oracle Database
 - **Database work:** Oracle SQL Developer extension in **VS Code**: connect, run queries, inspect tables.
 - **Website code:** also in VS Code. Open this folder (`File > Open Folder`).
 
-## Tables the site uses
-
-| Table | Columns used |
-|---|---|
-| `BOOKS` | `book_id`, `author_id`, `isbn`, `title`, `unit_price`, `stock_quantity`, `publication_year`, `last_viewed` |
-| `AUTHORS` | `author_id`, `author_name`, `country` |
-| `CUSTOMERS` | `customer_id`, `first_name`, `last_name`, `email`, `phone`, `registration_date` |
-| `ORDERS` | `order_id`, `customer_id`, `order_date`, `order_status` |
-| `ORDER_ITEMS` | `order_item_id`, `order_id`, `book_id`, `quantity`, `unit_price` |
-| `REVIEWS` | `review_id`, `book_id`, `reviewer`, `rating`, `review_text`, `created_at` |
-
-`REVIEWS` and `BOOKS.LAST_VIEWED` were added for the reviews and "recently viewed" features. If you ever need to recreate them:
-
-```sql
-ALTER TABLE books ADD (last_viewed TIMESTAMP);
-
-CREATE TABLE reviews (
-  review_id   NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  book_id     NUMBER NOT NULL REFERENCES books (book_id) ON DELETE CASCADE,
-  reviewer    VARCHAR2(80)  NOT NULL,
-  rating      NUMBER(1)     NOT NULL CHECK (rating BETWEEN 1 AND 5),
-  review_text VARCHAR2(1000),
-  created_at  TIMESTAMP DEFAULT SYSTIMESTAMP
-);
-```
-
 ## Setup
 
 1. Install Python 3.9 or newer.
-2. Copy `.env.example` to `.env` and fill in:
+2. **Run `setup_cart_stock.sql` once** in VS Code (Oracle SQL Developer extension), using the same connection/user as your `.env`. Run it as a script. It adds the tables for the cart and the saved low-stock threshold, plus two safety triggers. It does not change your existing tables.
+3. Copy `.env.example` to `.env` and fill in:
    - `DB_USER` and `DB_PASSWORD`: the same login you use in SQL Developer
    - `DB_CONNECT_STRING`: `host:port/service_name`, e.g. `localhost:1521/XEPDB1`
-3. In the VS Code terminal:
+4. In the VS Code terminal:
    ```
    python -m venv venv
    venv\Scripts\activate        (Windows)
@@ -51,43 +26,92 @@ CREATE TABLE reviews (
    pip install -r requirements.txt
    python app.py
    ```
-4. Open http://localhost:3000
+5. Open http://localhost:3000
 
 The `oracledb` package connects directly (Thin mode), so Oracle Instant Client is not needed for Oracle 12.1 and newer.
 
 ## What you can do
 
-**Books**
-- Add, edit and delete books (pick the author from a list)
-- Search by title, author or ISBN
-- Sort by recently added, recently viewed, title A → Z or title Z → A
-- Click a title (or **Reviews**) to read reviews, see the average rating, post a 1-5 star review, or delete one
-- A book that appears in an order can't be deleted; the site says so
+**Stock tab**
+- See every book's stock with a status: OK, Low, or Out of stock, plus units sold in the last 30 days and an estimate of how many days the stock will last.
+- Set the warning threshold ("warn me when a book has N copies or fewer"). It is saved in the database for everyone.
+- A yellow warning banner appears at the top of **every** page while any book is at or below the threshold. After an order is placed, the page also tells you which books just dropped to the threshold.
+- To add stock, edit the book on the Books tab.
 
-**Orders:** list with customer, date, status, item count and total; **Details** shows every book in the order with quantity and prices. Searchable by order number, customer or status.
+**Cart and price lock**
+- On the **Cart** tab, pick a customer and add books. The book's price is **locked when it is first added**.
+- If the book's price changes later, the cart keeps the locked price and shows "Price is now X; yours stays Y".
+- **Place order** creates the order and its order lines using the locked prices, and reduces stock, all in one step. If anything fails (for example not enough stock), nothing is saved.
+- Prices on existing orders never change when a book's price is edited. The database also enforces this: two triggers reject any attempt to edit the price on an order line or a cart line.
+- The price is always read from the database when a book is added, never from the browser, so it can't be altered from the page.
 
-**Customers:** list with order counts, search, and add new customers.
+**Books:** add, edit, delete; search by title, author or ISBN; sort by recently added, recently viewed, A → Z or Z → A; read and write reviews. A book that appears in an order can't be deleted.
 
-**Authors:** list with book counts, and add new authors.
+**Orders:** list with customer, date, status, item count and total; **Details** shows each book with the price paid. **Customers** and **Authors:** lists with search and add forms.
 
 Notes:
+- New orders use a status that already exists in your `orders` table (you choose it next to **Place order**), so the database accepts it.
 - "Recently added" uses the highest `book_id`, because `BOOKS` has no created date.
-- "Recently viewed" is the last time anyone opened a book's reviews. There is no login, so it is shared by everyone, and reviewers type their own name.
+- "Recently viewed" is the last time anyone opened a book's reviews. There is no login, so it is shared by everyone.
 - The currency symbol is `₹`; change `CURRENCY` at the top of `public/app.js`.
-- New rows: if an ID column isn't auto-generated in your database, the site uses the next free number (highest ID + 1).
+- If an ID column isn't auto-generated in your database, the site uses the next free number (highest ID + 1).
+
+## Tables
+
+| Table | Used for |
+|---|---|
+| `BOOKS` | `book_id`, `author_id`, `isbn`, `title`, `unit_price`, `stock_quantity`, `publication_year`, `last_viewed` |
+| `AUTHORS` | `author_id`, `author_name`, `country` |
+| `CUSTOMERS` | `customer_id`, `first_name`, `last_name`, `email`, `phone`, `registration_date` |
+| `ORDERS` | `order_id`, `customer_id`, `order_date`, `order_status` |
+| `ORDER_ITEMS` | `order_item_id`, `order_id`, `book_id`, `quantity`, `unit_price` (the price paid) |
+| `REVIEWS` | `review_id`, `book_id`, `reviewer`, `rating`, `review_text`, `created_at` |
+| `CART_ITEMS` (new) | `customer_id`, `book_id`, `quantity`, `locked_price`, `added_at` |
+| `APP_SETTINGS` (new) | `setting_key`, `setting_value` (holds the low-stock threshold) |
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `app.py` | Flask API for books, reviews, authors, customers and orders |
+| `app.py` | Flask API |
+| `setup_cart_stock.sql` | One-time setup for the cart, settings and price-lock triggers |
+| `export_db.py` | Saves your Oracle database to `database/bookstore.db` |
+| `.gitignore` | Keeps `.env` and `venv/` out of Git |
 | `requirements.txt` | Python packages |
 | `public/index.html`, `style.css`, `app.js` | The user interface |
 | `.env` | Your database credentials (never share or commit this) |
 
+## Save the database to a .db file
+
+Oracle doesn't keep a database in one file, so `export_db.py` copies your tables (structure and data) into a portable SQLite file:
+
+```
+python export_db.py
+```
+
+This writes `database/bookstore.db`. Run it again any time to refresh the snapshot. Open it in VS Code with the **SQLite Viewer** extension. The website still uses Oracle.
+
+The file contains customer names, emails and phone numbers. Keep the GitHub repository **private**, or leave the personal data out:
+
+```
+python export_db.py --no-data customers
+```
+
+## Put the project on GitHub (from VS Code)
+
+1. Install Git (https://git-scm.com) and create a free GitHub account.
+2. In VS Code, open the project folder, then open **Source Control** (the branch icon in the left bar, or Ctrl+Shift+G).
+3. Click **Initialize Repository**. The included `.gitignore` keeps `.env` (your password) out of Git.
+4. Hover over the file list, click **+** to stage all changes, type a message such as `First version`, and click **Commit**.
+5. Click **Publish Branch**, sign in to GitHub when asked, and choose **Private repository** (recommended).
+
+Afterwards, commit as you go: change something, open Source Control, type a short message, press Ctrl+Enter to commit, then click **Sync Changes** to send it to GitHub.
+
 ## Troubleshooting
 
+- **"A required table is missing. Run setup_cart_stock.sql":** you haven't run the setup script yet, or ran it as a different user than `.env` uses.
+- **ORA-00955 name is already used (running the setup script):** a table from the script already exists. Remove that part of the script and run the rest.
+- **ORA-02270 no matching unique or primary key (running the setup script):** `customers.customer_id` or `books.book_id` isn't a primary key in your database. Tell me and I'll adjust the script.
 - **ORA-01017 invalid username/password:** check `.env`.
 - **Connection refused / DPY-6005:** wrong host, port or service name, or the listener isn't running. Use the same details as in SQL Developer.
-- **ORA-00942 table or view does not exist:** `.env` points at a different database user than the one that owns the tables.
 - **Page looks old after an update:** hard-refresh with Ctrl+F5.
