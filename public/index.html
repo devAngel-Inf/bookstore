@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Book Manager</title>
+  <link rel="stylesheet" href="style.css?v=4" />
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Playwrite+IT+Trad:wght@100..400&display=swap');
+  </style>
+</head>
+<body>
+  <header>
+    <h1>ꨄ 🕮 ⋆☕︎˖ Book Manager™ ️</h1>
+    <nav class="tabs">
+      <button type="button" data-tab="books" class="active">Books</button>
+      <button type="button" data-tab="orders">Orders</button>
+      <button type="button" data-tab="customers">Customers</button>
+      <button type="button" data-tab="authors">Authors</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ================= BOOKS ================= -->
+    <div class="tab" id="tab-books">
+      <section class="card">
+        <h2 id="form-title">Add a book</h2>
+        <form id="book-form">
+          <input type="hidden" id="book_id" />
+          <div class="grid">
+            <label>Title* <input id="title" maxlength="150" required /></label>
+            <label>Author*
+              <select id="author_id" required><option value="">Choose…</option></select>
+            </label>
+            <label>ISBN* <input id="isbn" maxlength="13" required /></label>
+            <label>Price* <input id="unit_price" type="number" min="0" step="0.01" required /></label>
+            <label>Stock <input id="stock_quantity" type="number" min="0" value="0" /></label>
+            <label>Publication year <input id="publication_year" type="number" min="0" max="2100" /></label>
+          </div>
+          <div class="actions">
+            <button type="submit" id="save-btn">Add book</button>
+            <button type="button" id="cancel-btn" class="secondary" hidden>Cancel edit</button>
+          </div>
+          <p id="message" role="status"></p>
+        </form>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Library</h2>
+          <div class="toolbar">
+            <input id="search" type="search" placeholder="Search title, author or ISBN…" />
+            <label class="inline">
+              Sort by
+              <select id="sort">
+                <option value="recent_added">Recently added</option>
+                <option value="recent_viewed">Recently viewed</option>
+                <option value="title_asc">Title A → Z</option>
+                <option value="title_desc">Title Z → A</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Title</th><th>Author</th><th>ISBN</th><th>Price</th>
+                <th>Stock</th><th>Year</th><th>Rating</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="book-rows"></tbody>
+          </table>
+        </div>
+        <p id="empty" class="note" hidden>No books found.</p>
+      </section>
+    </div>
+
+    <!-- ================= ORDERS ================= -->
+    <div class="tab" id="tab-orders" hidden>
+      <section class="card">
+        <div class="card-head">
+          <h2>Orders</h2>
+          <div class="toolbar">
+            <input id="order-search" type="search" placeholder="Search order #, customer or status…" />
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Order #</th><th>Customer</th><th>Date</th><th>Status</th><th>Items</th><th>Total</th><th></th></tr>
+            </thead>
+            <tbody id="order-rows"></tbody>
+          </table>
+        </div>
+        <p id="orders-empty" class="note" hidden>No orders found.</p>
+      </section>
+    </div>
+
+    <!-- ================= CUSTOMERS ================= -->
+    <div class="tab" id="tab-customers" hidden>
+      <section class="card">
+        <h2>Add a customer</h2>
+        <form id="customer-form">
+          <div class="grid">
+            <label>First name* <input id="c_first" maxlength="50" required /></label>
+            <label>Last name* <input id="c_last" maxlength="50" required /></label>
+            <label>Email* <input id="c_email" type="email" maxlength="100" required /></label>
+            <label>Phone <input id="c_phone" inputmode="tel" /></label>
+          </div>
+          <div class="actions"><button type="submit">Add customer</button></div>
+          <p id="customer-message" role="status"></p>
+        </form>
+      </section>
+      <section class="card">
+        <div class="card-head">
+          <h2>Customers</h2>
+          <div class="toolbar">
+            <input id="customer-search" type="search" placeholder="Search name or email…" />
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>ID</th><th>Name</th><th>Email</th><th>Phone</th><th>Registered</th><th>Orders</th></tr>
+            </thead>
+            <tbody id="customer-rows"></tbody>
+          </table>
+        </div>
+        <p id="customers-empty" class="note" hidden>No customers found.</p>
+      </section>
+    </div>
+
+    <!-- ================= AUTHORS ================= -->
+    <div class="tab" id="tab-authors" hidden>
+      <section class="card">
+        <h2>Add an author</h2>
+        <form id="author-form">
+          <div class="grid">
+            <label>Name* <input id="a_name" maxlength="100" required /></label>
+            <label>Country <input id="a_country" maxlength="60" /></label>
+          </div>
+          <div class="actions"><button type="submit">Add author</button></div>
+          <p id="author-message" role="status"></p>
+        </form>
+      </section>
+      <section class="card">
+        <h2>Authors</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>Name</th><th>Country</th><th>Books</th></tr></thead>
+            <tbody id="author-rows"></tbody>
+          </table>
+        </div>
+        <p id="authors-empty" class="note" hidden>No authors found.</p>
+      </section>
+    </div>
+  </main>
+
+  <!-- Reviews dialog -->
+  <dialog id="review-dialog">
+    <div class="dialog-head">
+      <div>
+        <h2 id="rv-title"></h2>
+        <p id="rv-author" class="muted"></p>
+      </div>
+      <button type="button" id="rv-close" class="secondary small">Close</button>
+    </div>
+
+    <p id="rv-summary" class="rv-summary"></p>
+    <ul id="rv-list" class="rv-list"></ul>
+
+    <form id="review-form">
+      <h3>Write a review</h3>
+      <div class="grid">
+        <label>Your name* <input id="rv-name" maxlength="80" required /></label>
+        <label>Rating*
+          <select id="rv-rating" required>
+            <option value="">Choose…</option>
+            <option value="5">★★★★★ (5)</option>
+            <option value="4">★★★★ (4)</option>
+            <option value="3">★★★ (3)</option>
+            <option value="2">★★ (2)</option>
+            <option value="1">★ (1)</option>
+          </select>
+        </label>
+      </div>
+      <label>Review
+        <textarea id="rv-text" rows="3" maxlength="1000" placeholder="What did you think?"></textarea>
+      </label>
+      <div class="actions"><button type="submit">Post review</button></div>
+      <p id="rv-message" role="status"></p>
+    </form>
+  </dialog>
+
+  <!-- Order details dialog -->
+  <dialog id="order-dialog">
+    <div class="dialog-head">
+      <div>
+        <h2 id="od-title"></h2>
+        <p id="od-meta" class="muted"></p>
+      </div>
+      <button type="button" id="od-close" class="secondary small">Close</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Book</th><th>Author</th><th>Qty</th><th>Unit price</th><th>Line total</th></tr></thead>
+        <tbody id="od-rows"></tbody>
+        <tfoot><tr><td colspan="4" class="right"><strong>Order total</strong></td><td id="od-total"></td></tr></tfoot>
+      </table>
+    </div>
+    <p id="od-message" class="note"></p>
+  </dialog>
+
+  <script src="app.js?v=4"></script>
+</body>
+</html>
