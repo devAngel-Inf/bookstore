@@ -139,11 +139,9 @@ Afterwards, commit as you go: change something, open Source Control, type a shor
 
 ## Troubleshooting
 
-- **"A required table is missing. Run setup_cart_stock.sql and setup_auth_tags.sql":** you haven't run a setup script yet, or ran it as a different user than `.env` uses.
-- **The login page shows an error instead of a form:** the same cause. Run `setup_auth_tags.sql`.
-- **ORA-00955 name is already used (running a setup script):** a table from the script already exists. Remove that part of the script and run the rest.
-- **ORA-02270 no matching unique or primary key (running a setup script):** `customers.customer_id` or `books.book_id` isn't a primary key in your database. Tell me and I'll adjust the script.
+- **"A required table is missing. Run setup_cart_stock.sql":** you haven't run the setup script yet, or ran it as a different user than `.env` uses.
+- **ORA-00955 name is already used (running the setup script):** a table from the script already exists. Remove that part of the script and run the rest.
+- **ORA-02270 no matching unique or primary key (running the setup script):** `customers.customer_id` or `books.book_id` isn't a primary key in your database. Tell me and I'll adjust the script.
 - **ORA-01017 invalid username/password:** check `.env`.
 - **Connection refused / DPY-6005:** wrong host, port or service name, or the listener isn't running. Use the same details as in SQL Developer.
 - **Page looks old after an update:** hard-refresh with Ctrl+F5.
-- **Signed out every time you save a file:** Flask's debug mode restarts the server on each change, which creates a new session key. Set `SECRET_KEY` in `.env` while developing.
