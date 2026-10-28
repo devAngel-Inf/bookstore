@@ -1,10 +1,10 @@
 :root {
-  --bg: #f5f3ee;
+  --bg: #f4e4f2;
   --card: #ffffff;
   --ink: #26231f;
   --muted: #7a746b;
   --line: #e4dfd5;
-  --accent: #2f5d50;
+  --accent: #5f0450;
   --accent-ink: #ffffff;
   --danger: #b3382c;
   --star: #c98a1b;
@@ -29,9 +29,22 @@ header {
   background: var(--accent);
   color: var(--accent-ink);
 }
-header h1 { margin: 0; font-size: 1.4rem; }
+header h1 {
+  margin: 0; font-size: 1.4rem; 
+  font-family: "Playwrite IT Trad", cursive;
+}
 
-.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.playwrite-it-trad {
+  font-family: "Playwrite IT Trad", cursive;
+  font-optical-sizing: auto;
+  font-weight: 400;
+  font-style: normal;
+}
+
+.tabs { 
+  display: flex; gap: 4px; flex-wrap: wrap; 
+  font-family: "Playwrite IT Trad", cursive;
+}
 .tabs button {
   background: transparent;
   color: var(--accent-ink);
