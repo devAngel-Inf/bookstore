@@ -1,16 +1,25 @@
 import datetime
 import os
 import re
+import secrets
+import time
 
 import oracledb
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, redirect, request, session
 from werkzeug.exceptions import HTTPException
+from werkzeug.security import check_password_hash, generate_password_hash
 
 load_dotenv()
 
 # Serve the UI from the public/ folder at the site root
 app = Flask(__name__, static_folder="public", static_url_path="")
+
+# Login sessions are signed with this key. If SECRET_KEY is not set in .env, a new
+# random key is made every time app.py starts, so everyone has to log in again after
+# a restart. Set SECRET_KEY in .env if you want logins to survive restarts.
+app.secret_key = os.getenv("SECRET_KEY") or secrets.token_hex(32)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
 
 pool = oracledb.create_pool(
     user=os.getenv("DB_USER"),
@@ -31,6 +40,8 @@ SORTS = {
 DEFAULT_SORT = "recent_added"
 DEFAULT_LOW_STOCK = 5
 LOW_STOCK_KEY = "low_stock_threshold"
+MAX_TAGS = 10
+MAX_TAG_LEN = 40
 
 
 class Invalid(Exception):
@@ -169,7 +180,7 @@ def handle_db_error(err):
     if "ORA-20001" in msg:
         return jsonify(error="Prices on order lines are locked and cannot be changed"), 409
     if "ORA-00001" in msg:
-        return jsonify(error="That value already exists (for example a duplicate ISBN or email)"), 409
+        return jsonify(error="That value already exists (for example a duplicate ISBN, email or username)"), 409
     if "ORA-02292" in msg:
         return jsonify(error="Can't delete this: other records (such as orders) still use it"), 409
     if "ORA-02291" in msg:
@@ -183,8 +194,8 @@ def handle_db_error(err):
     if "ORA-01438" in msg:
         return jsonify(error="A number is larger than the database allows"), 400
     if "ORA-00942" in msg:
-        return jsonify(error="A required table is missing. Run setup_cart_stock.sql once in "
-                             "VS Code (see README), then try again."), 500
+        return jsonify(error="A required table is missing. Run setup_cart_stock.sql and "
+                             "setup_auth_tags.sql once in VS Code (see README), then try again."), 500
     app.logger.error(msg)
     return jsonify(error=msg), 500
 
@@ -197,9 +208,208 @@ def handle_unexpected(err):
     return jsonify(error="Unexpected server error"), 500
 
 
+# ---------- Login ----------
+
+# Pages and endpoints that work without being signed in
+PUBLIC_PATHS = {
+    "/login", "/login.html", "/login.js", "/theme.js", "/style.css",
+    "/api/session", "/api/login", "/api/signup",
+}
+
+
+@app.before_request
+def require_login():
+    if request.path in PUBLIC_PATHS or session.get("user"):
+        return None
+    if request.path.startswith("/api/"):
+        return jsonify(error="Please sign in", login_required=True), 401
+    return redirect("/login")
+
+
+# Very small brake on password guessing: 5 wrong tries per IP per 5 minutes
+FAILED_LOGINS = {}
+
+
+def too_many_attempts(ip):
+    now = time.time()
+    recent = [t for t in FAILED_LOGINS.get(ip, []) if now - t < 300]
+    FAILED_LOGINS[ip] = recent
+    return len(recent) >= 5
+
+
+def user_count():
+    return run("SELECT COUNT(*) AS n FROM app_users", fetch=True)[0]["n"]
+
+
+@app.route("/login")
+def login_page():
+    if session.get("user"):
+        return redirect("/")
+    return app.send_static_file("login.html")
+
+
+@app.get("/api/session")
+def session_info():
+    return jsonify(
+        logged_in=bool(session.get("user")),
+        username=session.get("user"),
+        needs_setup=user_count() == 0,
+    )
+
+
+@app.post("/api/signup")
+def signup():
+    """Creates the FIRST account. Once any account exists, only a signed-in user can add more."""
+    if user_count() > 0 and not session.get("user"):
+        return jsonify(error="Sign-ups are closed. Ask an existing user to add you."), 403
+    body = request.get_json(silent=True) or {}
+    username = (text(body, "username", "Username", required=True, max_len=50) or "").lower()
+    if len(username) < 3:
+        raise Invalid("Username must be at least 3 characters")
+    password = str(body.get("password") or "")
+    if len(password) < 8:
+        raise Invalid("Password must be at least 8 characters")
+    insert_row("app_users", "user_id",
+               {"username": username, "password_hash": generate_password_hash(password)})
+    session.clear()
+    session["user"] = username
+    return jsonify(ok=True, username=username), 201
+
+
+@app.post("/api/login")
+def login():
+    ip = request.remote_addr or "?"
+    if too_many_attempts(ip):
+        return jsonify(error="Too many wrong attempts. Wait a few minutes and try again."), 429
+    body = request.get_json(silent=True) or {}
+    username = str(body.get("username") or "").strip().lower()
+    password = str(body.get("password") or "")
+    rows = run("SELECT password_hash FROM app_users WHERE username = :u",
+               {"u": username}, fetch=True)
+    if not rows or not check_password_hash(rows[0]["password_hash"], password):
+        FAILED_LOGINS.setdefault(ip, []).append(time.time())
+        return jsonify(error="Wrong username or password"), 401
+    FAILED_LOGINS.pop(ip, None)
+    session.clear()
+    session["user"] = username
+    return jsonify(ok=True, username=username)
+
+
+@app.post("/api/logout")
+def logout():
+    session.clear()
+    return jsonify(ok=True)
+
+
 @app.route("/")
 def index():
     return app.send_static_file("index.html")
+
+
+# ---------- Tags ----------
+
+def parse_tags(raw):
+    """Turn 'Fantasy, magic ,  YA' (or a list) into ['fantasy', 'magic', 'ya'].
+    Returns None when no tags were sent at all (meaning: leave tags unchanged)."""
+    if raw is None:
+        return None
+    items = raw.split(",") if isinstance(raw, str) else list(raw)
+    tags = []
+    for item in items:
+        tag = re.sub(r"\s+", " ", str(item or "")).strip().lower()
+        if not tag:
+            continue
+        if len(tag) > MAX_TAG_LEN:
+            raise Invalid(f"Each tag can be at most {MAX_TAG_LEN} characters")
+        if tag not in tags:
+            tags.append(tag)
+    if len(tags) > MAX_TAGS:
+        raise Invalid(f"A book can have at most {MAX_TAGS} tags")
+    return tags
+
+
+def save_tags(tx, book_id, tags):
+    """Replace a book's tags with this list (creating new tags as needed)."""
+    tx.execute("DELETE FROM book_tags WHERE book_id = :id", {"id": book_id})
+    for name in tags:
+        found = tx.query("SELECT tag_id FROM tags WHERE tag_name = :n", {"n": name})
+        tag_id = found[0]["tag_id"] if found else insert_row(
+            "tags", "tag_id", {"tag_name": name}, tx=tx)
+        tx.execute("INSERT INTO book_tags (book_id, tag_id) VALUES (:b, :t)",
+                   {"b": book_id, "t": tag_id})
+    # Keep the tag list tidy: drop tags that no book uses any more
+    tx.execute("DELETE FROM tags WHERE tag_id NOT IN (SELECT tag_id FROM book_tags)")
+
+
+@app.get("/api/tags")
+def list_tags():
+    rows = run(
+        """SELECT t.tag_name, COUNT(*) AS book_count
+             FROM tags t
+             JOIN book_tags bt ON bt.tag_id = t.tag_id
+            GROUP BY t.tag_name
+            ORDER BY COUNT(*) DESC, t.tag_name""",
+        fetch=True,
+    )
+    return jsonify(rows)
+
+
+@app.get("/api/books/<int:book_id>/similar")
+def similar_books(book_id):
+    """Books that share the most tags with this one."""
+    rows = run(
+        """SELECT b.book_id, b.title, a.author_name, b.unit_price, b.stock_quantity,
+                  COUNT(*) AS shared_count,
+                  LISTAGG(t.tag_name, ', ') WITHIN GROUP (ORDER BY t.tag_name) AS shared
+             FROM book_tags mine
+             JOIN book_tags other ON other.tag_id = mine.tag_id
+                                 AND other.book_id <> mine.book_id
+             JOIN tags t ON t.tag_id = mine.tag_id
+             JOIN books b ON b.book_id = other.book_id
+             LEFT JOIN authors a ON a.author_id = b.author_id
+            WHERE mine.book_id = :id
+            GROUP BY b.book_id, b.title, a.author_name, b.unit_price, b.stock_quantity
+            ORDER BY shared_count DESC, LOWER(b.title)
+            FETCH FIRST 6 ROWS ONLY""",
+        {"id": book_id},
+        fetch=True,
+    )
+    return jsonify(rows)
+
+
+@app.get("/api/customers/<int:customer_id>/recommendations")
+def recommendations(customer_id):
+    """Books this customer hasn't bought, ranked by how many of their past
+    purchases share tags with them."""
+    rows = run(
+        """WITH liked AS (
+               SELECT bt.tag_id, COUNT(*) AS weight
+                 FROM orders o
+                 JOIN order_items i ON i.order_id = o.order_id
+                 JOIN book_tags bt ON bt.book_id = i.book_id
+                WHERE o.customer_id = :cid
+                GROUP BY bt.tag_id)
+           SELECT b.book_id, b.title, a.author_name, b.unit_price, b.stock_quantity,
+                  SUM(l.weight) AS score,
+                  LISTAGG(t.tag_name, ', ') WITHIN GROUP (ORDER BY t.tag_name) AS matched
+             FROM liked l
+             JOIN book_tags bt ON bt.tag_id = l.tag_id
+             JOIN tags t ON t.tag_id = l.tag_id
+             JOIN books b ON b.book_id = bt.book_id
+             LEFT JOIN authors a ON a.author_id = b.author_id
+            WHERE b.stock_quantity > 0
+              AND NOT EXISTS (SELECT 1 FROM orders o2
+                                JOIN order_items i2 ON i2.order_id = o2.order_id
+                               WHERE o2.customer_id = :cid AND i2.book_id = b.book_id)
+              AND NOT EXISTS (SELECT 1 FROM cart_items c
+                               WHERE c.customer_id = :cid AND c.book_id = b.book_id)
+            GROUP BY b.book_id, b.title, a.author_name, b.unit_price, b.stock_quantity
+            ORDER BY score DESC, LOWER(b.title)
+            FETCH FIRST 5 ROWS ONLY""",
+        {"cid": customer_id},
+        fetch=True,
+    )
+    return jsonify(rows)
 
 
 # ---------- Books ----------
@@ -219,21 +429,33 @@ def clean_book(body):
 @app.get("/api/books")
 def list_books():
     q = f"%{request.args.get('q', '').strip().lower()}%"
+    tag = request.args.get("tag", "").strip().lower()
     order_by = SORTS.get(request.args.get("sort"), SORTS[DEFAULT_SORT])
+
+    tag_exists = ("SELECT 1 FROM book_tags bt JOIN tags t ON t.tag_id = bt.tag_id "
+                  "WHERE bt.book_id = b.book_id AND ")
+    where = ("(LOWER(b.title) LIKE :q OR LOWER(a.author_name) LIKE :q OR LOWER(b.isbn) LIKE :q "
+             f"OR EXISTS ({tag_exists} t.tag_name LIKE :q))")
+    binds = {"q": q}
+    if tag:
+        where += f" AND EXISTS ({tag_exists} t.tag_name = :tag)"
+        binds["tag"] = tag
+
     rows = run(
         f"""SELECT b.book_id, b.title, b.author_id, a.author_name, b.isbn,
                    b.unit_price, b.stock_quantity, b.publication_year,
                    (SELECT ROUND(AVG(r.rating), 1) FROM reviews r
                      WHERE r.book_id = b.book_id) AS avg_rating,
                    (SELECT COUNT(*) FROM reviews r
-                     WHERE r.book_id = b.book_id) AS review_count
+                     WHERE r.book_id = b.book_id) AS review_count,
+                   (SELECT LISTAGG(t.tag_name, ',') WITHIN GROUP (ORDER BY t.tag_name)
+                      FROM book_tags bt JOIN tags t ON t.tag_id = bt.tag_id
+                     WHERE bt.book_id = b.book_id) AS tags
               FROM books b
               LEFT JOIN authors a ON a.author_id = b.author_id
-             WHERE LOWER(b.title) LIKE :q
-                OR LOWER(a.author_name) LIKE :q
-                OR LOWER(b.isbn) LIKE :q
+             WHERE {where}
              ORDER BY {order_by}""",
-        {"q": q},
+        binds,
         fetch=True,
     )
     return jsonify(rows)
@@ -241,7 +463,13 @@ def list_books():
 
 @app.post("/api/books")
 def add_book():
-    insert_row("books", "book_id", clean_book(request.get_json(silent=True)))
+    body = request.get_json(silent=True)
+    book = clean_book(body)
+    tags = parse_tags((body or {}).get("tags")) or []
+    with Tx() as tx:
+        book_id = insert_row("books", "book_id", book, tx=tx)
+        if tags:
+            save_tags(tx, book_id, tags)
     return jsonify(ok=True), 201
 
 
@@ -249,23 +477,30 @@ def add_book():
 def update_book(book_id):
     # Only the books row changes. Prices already copied into carts and orders
     # are separate values and are never touched here (price immutability).
-    b = clean_book(request.get_json(silent=True))
-    run(
-        """UPDATE books
-              SET title = :title, author_id = :author_id, isbn = :isbn,
-                  unit_price = :unit_price, stock_quantity = :stock_quantity,
-                  publication_year = :publication_year
-            WHERE book_id = :id""",
-        {**b, "id": book_id},
-    )
+    body = request.get_json(silent=True)
+    b = clean_book(body)
+    tags = parse_tags((body or {}).get("tags"))
+    with Tx() as tx:
+        tx.execute(
+            """UPDATE books
+                  SET title = :title, author_id = :author_id, isbn = :isbn,
+                      unit_price = :unit_price, stock_quantity = :stock_quantity,
+                      publication_year = :publication_year
+                WHERE book_id = :id""",
+            {**b, "id": book_id},
+        )
+        if tags is not None:
+            save_tags(tx, book_id, tags)
     return jsonify(ok=True)
 
 
 @app.delete("/api/books/<int:book_id>")
 def delete_book(book_id):
-    # Reviews and cart lines go with the book (ON DELETE CASCADE). A book that
-    # appears in order_items is protected by the database and returns a clear message.
-    run("DELETE FROM books WHERE book_id = :id", {"id": book_id})
+    # Reviews, tag links and cart lines go with the book (ON DELETE CASCADE). A book
+    # that appears in order_items is protected by the database and returns a clear message.
+    with Tx() as tx:
+        tx.execute("DELETE FROM books WHERE book_id = :id", {"id": book_id})
+        tx.execute("DELETE FROM tags WHERE tag_id NOT IN (SELECT tag_id FROM book_tags)")
     return jsonify(ok=True)
 
 

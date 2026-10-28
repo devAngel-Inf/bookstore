@@ -1,7 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const CURRENCY = '₹'; // change to '$' or '' if you prefer
 
-const state = { books: [], authors: [], stock: null, threshold: 5 };
+const state = { books: [], authors: [], stock: null, threshold: 5, tags: [], tagFilter: '' };
 let openBookId = null; // book currently shown in the review dialog
 
 // ---------- Helpers ----------
@@ -27,6 +27,10 @@ async function api(url, options) {
   try {
     const res = await fetch(url, options);
     const data = await res.json().catch(() => ({}));
+    // Session ended (for example the server was restarted): go back to the login page
+    if (res.status === 401 && data.login_required) {
+      window.location.href = '/login';
+    }
     return { ok: res.ok, data };
   } catch {
     return { ok: false, data: { error: 'Could not reach the server' } };
@@ -63,6 +67,18 @@ function debounce(fn, ms = 250) {
   let t;
   return () => { clearTimeout(t); t = setTimeout(fn, ms); };
 }
+
+// ---------- Account (who is signed in, log out) ----------
+
+async function loadWhoAmI() {
+  const res = await api('/api/session');
+  if (res.ok && res.data.username) $('whoami').textContent = `👤 ${res.data.username}`;
+}
+
+$('logout-btn').addEventListener('click', async () => {
+  await api('/api/logout', { method: 'POST' });
+  window.location.href = '/login';
+});
 
 // ---------- Stock status ----------
 
@@ -154,7 +170,7 @@ $('threshold-form').addEventListener('submit', async (e) => {
 // ---------- Tabs ----------
 
 const loaders = {
-  books: () => Promise.all([loadAuthors(), loadBooks()]),
+  books: () => Promise.all([loadAuthors(), loadTags(), loadBooks()]),
   stock: () => Promise.resolve(),
   cart: loadCartTab,
   orders: loadOrders,
@@ -208,16 +224,71 @@ $('author-form').addEventListener('submit', async (e) => {
   loadAuthors();
 });
 
+// ---------- Tags ----------
+
+const splitTags = (s) => String(s || '').split(',').map((t) => t.trim()).filter(Boolean);
+
+function tagChips(tagString) {
+  return splitTags(tagString).map((t) =>
+    `<button type="button" class="chip" data-tag="${esc(t)}" title="Show books tagged ${esc(t)}">${esc(t)}</button>`
+  ).join('');
+}
+
+async function loadTags() {
+  const res = await api('/api/tags');
+  state.tags = res.ok ? res.data : [];
+  if (state.tagFilter && !state.tags.some((t) => t.tag_name === state.tagFilter)) {
+    state.tagFilter = '';
+  }
+  renderTagBar();
+}
+
+function renderTagBar() {
+  const bar = $('tag-filter');
+  bar.hidden = state.tags.length === 0;
+  bar.innerHTML = '<span class="muted">Browse by tag:</span>' +
+    `<button type="button" class="chip ${state.tagFilter ? '' : 'active'}" data-filter-tag="">All</button>` +
+    state.tags.map((t) => `
+      <button type="button" class="chip ${t.tag_name === state.tagFilter ? 'active' : ''}"
+              data-filter-tag="${esc(t.tag_name)}">${esc(t.tag_name)} (${esc(t.book_count)})</button>`).join('');
+
+  $('tag-suggestions').innerHTML = state.tags.map((t) =>
+    `<button type="button" class="chip" data-suggest="${esc(t.tag_name)}">+ ${esc(t.tag_name)}</button>`
+  ).join('');
+}
+
+function setTagFilter(tag) {
+  state.tagFilter = tag;
+  renderTagBar();
+  loadBooks();
+}
+
+$('tag-filter').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-filter-tag]');
+  if (btn) setTagFilter(btn.dataset.filterTag);
+});
+
+$('tag-suggestions').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-suggest]');
+  if (!btn) return;
+  const current = splitTags($('tags').value);
+  if (!current.includes(btn.dataset.suggest)) current.push(btn.dataset.suggest);
+  $('tags').value = current.join(', ');
+  $('tags').focus();
+});
+
 // ---------- Books ----------
 
 const bookFields = ['title', 'author_id', 'isbn', 'unit_price', 'stock_quantity', 'publication_year'];
 
 async function loadBooks() {
   const q = encodeURIComponent($('search').value.trim());
-  const res = await api(`/api/books?q=${q}&sort=${$('sort').value}`);
+  const tag = encodeURIComponent(state.tagFilter);
+  const res = await api(`/api/books?q=${q}&sort=${$('sort').value}&tag=${tag}`);
   state.books = res.ok ? res.data : [];
   renderBooks();
-  tableNote('empty', state.books, res, 'No books found.');
+  tableNote('empty', state.books, res,
+    state.tagFilter ? `No books tagged "${state.tagFilter}" match.` : 'No books found.');
 }
 
 function ratingCell(b) {
@@ -237,6 +308,7 @@ function renderBooks() {
       <td>${esc(b.stock_quantity)} ${status === 'ok' ? '' : statusBadge(status)}</td>
       <td>${esc(b.publication_year)}</td>
       <td>${ratingCell(b)}</td>
+      <td><div class="chips">${tagChips(b.tags)}</div></td>
       <td class="row-actions">
         <button class="small" data-reviews="${b.book_id}">Reviews</button>
         <button class="small secondary" data-edit="${b.book_id}">Edit</button>
@@ -260,6 +332,7 @@ function startEdit(id) {
   if (!b) return;
   $('book_id').value = b.book_id;
   bookFields.forEach((f) => { $(f).value = b[f] ?? ''; });
+  $('tags').value = splitTags(b.tags).join(', ');
   $('form-title').textContent = 'Edit book';
   $('save-btn').textContent = 'Save changes';
   $('cancel-btn').hidden = false;
@@ -271,6 +344,7 @@ $('book-form').addEventListener('submit', async (e) => {
   const id = $('book_id').value;
   const payload = {};
   bookFields.forEach((f) => { payload[f] = $(f).value; });
+  payload.tags = $('tags').value;
 
   const res = await api(id ? `/api/books/${id}` : '/api/books', send(id ? 'PUT' : 'POST', payload));
   if (!res.ok) return setMsg('message', res.data.error || 'Something went wrong', true);
@@ -279,16 +353,18 @@ $('book-form').addEventListener('submit', async (e) => {
   resetBookForm();
   loadBooks();
   loadAuthors();
+  loadTags();
   refreshStock();
 });
 
 $('cancel-btn').addEventListener('click', () => { resetBookForm(); setMsg('message', ''); });
 
 $('book-rows').addEventListener('click', async (e) => {
-  const target = e.target.closest('[data-reviews], [data-edit], [data-delete]');
+  const target = e.target.closest('[data-reviews], [data-edit], [data-delete], [data-tag]');
   if (!target) return;
   e.preventDefault();
 
+  if (target.dataset.tag) return setTagFilter(target.dataset.tag);
   if (target.dataset.reviews) return openReviews(Number(target.dataset.reviews));
   if (target.dataset.edit) return startEdit(Number(target.dataset.edit));
 
@@ -297,6 +373,7 @@ $('book-rows').addEventListener('click', async (e) => {
     setMsg('message', res.ok ? 'Book deleted' : (res.data.error || 'Could not delete book'), !res.ok);
     if (!res.ok) window.scrollTo({ top: 0, behavior: 'smooth' });
     loadBooks();
+    loadTags();
     refreshStock();
   }
 });
@@ -314,9 +391,13 @@ async function openReviews(id) {
   openBookId = id;
   $('rv-title').textContent = b.title;
   $('rv-author').textContent = b.author_name ? `by ${b.author_name}` : '';
+  $('rv-tags').innerHTML = splitTags(b.tags)
+    .map((t) => `<span class="chip">${esc(t)}</span>`).join('');
   $('review-form').reset();
   setMsg('rv-message', '');
   $('rv-list').innerHTML = '';
+  $('rv-similar').innerHTML = '';
+  $('rv-similar-wrap').hidden = true;
   $('rv-summary').textContent = 'Loading reviews…';
   reviewDialog.showModal();
 
@@ -324,7 +405,23 @@ async function openReviews(id) {
   api(`/api/books/${id}/view`, { method: 'POST' })
     .then(() => { if ($('sort').value === 'recent_viewed') loadBooks(); });
 
+  loadSimilar(id);
   await loadReviews();
+}
+
+async function loadSimilar(id) {
+  const res = await api(`/api/books/${id}/similar`);
+  if (openBookId !== id || !res.ok || !res.data.length) return;
+  $('rv-similar').innerHTML = res.data.map((s) => `
+    <li>
+      <div class="reco-main">
+        <strong>${esc(s.title)}</strong>
+        <div class="muted">${esc(s.author_name || 'Unknown author')} · ${money(s.unit_price)}
+          · ${s.stock_quantity > 0 ? `${esc(s.stock_quantity)} in stock` : 'out of stock'}</div>
+        <div class="muted">Shared tags: ${esc(s.shared)}</div>
+      </div>
+    </li>`).join('');
+  $('rv-similar-wrap').hidden = false;
 }
 
 async function loadReviews() {
@@ -419,6 +516,7 @@ async function loadCart() {
   const cid = $('cart-customer').value;
   store.set('cartCustomer', cid);
   $('checkout-btn').disabled = true;
+  loadRecommendations(cid);
 
   if (!cid) {
     cartItems = [];
@@ -460,6 +558,45 @@ async function loadCart() {
   $('cart-empty').hidden = cartItems.length > 0;
   $('checkout-btn').disabled = cartItems.length === 0;
 }
+
+// Suggestions based on the tags of books this customer has bought before
+async function loadRecommendations(cid) {
+  const list = $('reco-list');
+  if (!cid) {
+    list.innerHTML = '';
+    $('reco-note').textContent = 'Choose a customer to see suggestions.';
+    return;
+  }
+  const res = await api(`/api/customers/${cid}/recommendations`);
+  if ($('cart-customer').value !== cid) return; // customer changed while loading
+  const recs = res.ok ? res.data : [];
+  if (!res.ok) {
+    $('reco-note').textContent = `Could not load suggestions: ${res.data.error || 'unknown error'}`;
+  } else {
+    $('reco-note').textContent = recs.length
+      ? 'Based on the tags of books this customer has ordered before.'
+      : 'No suggestions yet. They appear once this customer has ordered books that have tags.';
+  }
+  list.innerHTML = recs.map((r) => `
+    <li>
+      <div class="reco-main">
+        <strong>${esc(r.title)}</strong>
+        <div class="muted">${esc(r.author_name || 'Unknown author')} · ${money(r.unit_price)} · ${esc(r.stock_quantity)} in stock</div>
+        <div class="muted">Matches their taste: ${esc(r.matched)}</div>
+      </div>
+      <button class="small" data-reco-add="${r.book_id}">Add to cart</button>
+    </li>`).join('');
+}
+
+$('reco-list').addEventListener('click', async (e) => {
+  const book = e.target.dataset.recoAdd;
+  const cid = $('cart-customer').value;
+  if (!book || !cid) return;
+  const res = await api(`/api/customers/${cid}/cart`, send('POST', { book_id: book, quantity: 1 }));
+  if (!res.ok) return setMsg('cart-message', res.data.error || 'Could not add to cart', true);
+  setMsg('cart-message', `Added. Price locked at ${money(res.data.locked_price)}`);
+  loadCart();
+});
 
 $('cart-customer').addEventListener('change', () => {
   setMsg('cart-message', '');
@@ -619,4 +756,5 @@ $('od-close').addEventListener('click', () => orderDialog.close());
 [reviewDialog, orderDialog].forEach((d) =>
   d.addEventListener('click', (e) => { if (e.target === d) d.close(); }));
 
+loadWhoAmI();
 showTab('books');

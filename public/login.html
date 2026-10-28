@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign in · Book Manager</title>
+  <script src="theme.js"></script>
+  <link rel="stylesheet" href="style.css?v=6" />
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Playwrite+IT+Trad:wght@100..400&display=swap');
+  </style>
+</head>
+<body class="login-body">
+  <button type="button" id="theme-toggle" class="ghost floating" aria-pressed="false">⋆☾⋆ Dark</button>
+
+  <main class="login-wrap">
+    <section class="card login-card">
+      <h1 class="login-title">ꨄ 🕮 ⋆☕︎˖ Book Manager</h1>
+      <p id="login-sub" class="muted">Loading…</p>
+
+      <form id="login-form">
+        <label>Username
+          <input id="username" autocomplete="username" maxlength="50" required />
+        </label>
+        <label>Password
+          <input id="password" type="password" autocomplete="current-password" required />
+        </label>
+        <label id="confirm-row" hidden>Confirm password
+          <input id="confirm" type="password" autocomplete="new-password" />
+        </label>
+        <div class="actions">
+          <button type="submit" id="login-btn">Sign in</button>
+        </div>
+        <p id="login-message" role="status"></p>
+      </form>
+    </section>
+  </main>
+
+  <script src="login.js"></script>
+</body>
+</html>
