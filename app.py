@@ -260,9 +260,7 @@ def session_info():
 
 @app.post("/api/signup")
 def signup():
-    """Creates the FIRST account. Once any account exists, only a signed-in user can add more."""
-    if user_count() > 0 and not session.get("user"):
-        return jsonify(error="Sign-ups are closed. Ask an existing user to add you."), 403
+    """Anyone can create an account from the login page."""
     body = request.get_json(silent=True) or {}
     username = (text(body, "username", "Username", required=True, max_len=50) or "").lower()
     if len(username) < 3:
@@ -270,6 +268,8 @@ def signup():
     password = str(body.get("password") or "")
     if len(password) < 8:
         raise Invalid("Password must be at least 8 characters")
+    if run("SELECT 1 FROM app_users WHERE username = :u", {"u": username}, fetch=True):
+        raise Invalid("That username is already taken")
     insert_row("app_users", "user_id",
                {"username": username, "password_hash": generate_password_hash(password)})
     session.clear()

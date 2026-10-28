@@ -361,3 +361,8 @@ dialog::backdrop { background: var(--backdrop); }
 .login-card .muted { text-align: center; margin: 0 0 4px; }
 button.floating { position: fixed; top: 14px; right: 14px; color: var(--ink); }
 button.floating:hover { background: var(--btn-secondary); }
+
+.login-heading { margin: 0; font-size: 1.15rem; text-align: center; }
+.switch-mode { text-align: center; margin: 10px 0 0; }
+.switch-mode a { color: var(--link); font-weight: 600; margin-left: 4px; }
+[hidden] { display: none !important; }
