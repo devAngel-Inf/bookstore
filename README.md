@@ -96,22 +96,3 @@ The file contains customer names, emails and phone numbers. Keep the GitHub repo
 ```
 python export_db.py --no-data customers
 ```
-
-## Put the project on GitHub (from VS Code)
-
-1. Install Git (https://git-scm.com) and create a free GitHub account.
-2. In VS Code, open the project folder, then open **Source Control** (the branch icon in the left bar, or Ctrl+Shift+G).
-3. Click **Initialize Repository**. The included `.gitignore` keeps `.env` (your password) out of Git.
-4. Hover over the file list, click **+** to stage all changes, type a message such as `First version`, and click **Commit**.
-5. Click **Publish Branch**, sign in to GitHub when asked, and choose **Private repository** (recommended).
-
-Afterwards, commit as you go: change something, open Source Control, type a short message, press Ctrl+Enter to commit, then click **Sync Changes** to send it to GitHub.
-
-## Troubleshooting
-
-- **"A required table is missing. Run setup_cart_stock.sql":** you haven't run the setup script yet, or ran it as a different user than `.env` uses.
-- **ORA-00955 name is already used (running the setup script):** a table from the script already exists. Remove that part of the script and run the rest.
-- **ORA-02270 no matching unique or primary key (running the setup script):** `customers.customer_id` or `books.book_id` isn't a primary key in your database. Tell me and I'll adjust the script.
-- **ORA-01017 invalid username/password:** check `.env`.
-- **Connection refused / DPY-6005:** wrong host, port or service name, or the listener isn't running. Use the same details as in SQL Developer.
-- **Page looks old after an update:** hard-refresh with Ctrl+F5.
