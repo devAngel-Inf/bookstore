@@ -213,6 +213,7 @@ def handle_unexpected(err):
 # Pages and endpoints that work without being signed in
 PUBLIC_PATHS = {
     "/login", "/login.html", "/login.js", "/theme.js", "/style.css",
+    "/planet_drawings.jpg",
     "/api/session", "/api/login", "/api/signup",
 }
 
